@@ -1,0 +1,98 @@
+# 训练与数据
+data:
+  train_root: "/data/workspace/wangjunjun/DeepFakeDetection/Dataset/Xinye/split_train_crop/"
+  train_csv:  "/data/workspace/wangjunjun/DeepFakeDetection/deepfakedetection/label/xinye_train.txt"
+  val_root:   "/data/workspace/wangjunjun/DeepFakeDetection/Dataset/Xinye/split_val_crop/"
+  val_csv:    "/data/workspace/wangjunjun/DeepFakeDetection/deepfakedetection/label/xinye_val.txt"
+  img_size: 384
+  num_classes: 2
+  workers: 4
+  batch_size: 32
+  stratified_limit:
+    train: null
+    val: null
+
+train:
+  epochs: 10
+  warmup_epochs: 2            # 先只训 head，再解冻 backbone
+  ema:
+    enabled: false
+    decay: 0.999
+  mixup:
+    enabled: false
+    alpha: 0.2
+    prob_start: 0.50
+    prob_end: 0.10
+  debug: false
+  out_dir: "outputs_rgb"
+  max_train_batches: null     # 调试时可设 100 之类
+  max_val_batches: null
+
+optim:
+  name: adamw
+  lr_backbone: 5.0e-5
+  lr_head:     1.0e-3
+  weight_decay: 5.0e-2
+  scheduler: reduce_on_plateau  # 以 AUC 为指标触发降 lr
+
+loss:
+  name: focal
+  gamma: 1.2
+  class_balanced_alpha: false   # 若数据极不平衡可设 true
+  cb_beta: 0.9999
+
+# -----------------------------
+# 数据增强（含 JPEG 与 Self-Blend）
+# -----------------------------
+aug:
+  # 基础几何增强（在 build_transforms 里）
+  hflip_p: 0.5
+  rot_deg: 8
+
+  # JPEG 复压（贴近真实平台）
+  jpeg_prob: 0.10
+  jpeg_qmin: 40
+  jpeg_qmax: 90
+
+  # —— Self-Blend (SBI) —— 训练时用于把一部分“真”样本合成“假”
+  sbi_enabled: false          # 要用就改 true
+  sbi_prob: 0.30              # 对真样本触发概率（建议 0.2~0.4 做消融）
+  sbi_poisson: false          # true 用 Poisson（更真实但慢）；false 用羽化 Alpha（快）
+  sbi_edge_sigma: 5           # 融合边缘羽化强度（3~9 常用）
+  sbi_alpha_range: [0.65, 0.95]  # 融合整体强度范围
+  sbi_color_jitter: 0.08      # 源片段颜色扰动幅度
+  sbi_blur_prob: 0.20         # 源片段高斯模糊概率
+  sbi_warp_max_rot: 8         # 源片段小幅旋转
+  sbi_warp_max_scale: 0.10    # 源片段缩放
+  sbi_warp_max_shift: 0.05    # 源片段平移（相对宽高比例）
+  sbi_mask_shrink: 0.85       # 椭圆 mask 收缩系数（越小覆盖越少）
+
+# -----------------------------
+# 模型：选择 RGB 或 RGB+F3 双流
+# -----------------------------
+model:
+  # type: rgb      # 仅 RGB 空间分支（baseline）
+  type: rgb_f3     # RGB + F3 频域双流（FAD/LFS）
+  backbone: convnext_base_384_in22ft1k   # 空间分支主干
+  pretrained: true
+  pretrained_path: null
+  head: "ln_linear"
+
+  # F3 频域分支配置（仅在 type=rgb_f3 时生效）
+  freq:
+    enabled: true
+    mode: "Both"          # "FAD" | "LFS" | "Both"
+    transform: "fft"      # "fft" | "dct"（dct 需自行接入实现）
+    bands: 6              # 频带数（论文常用 6）
+    fad:
+      learnable_edges: false   # 等分频带；想学边界可设 true
+    lfs:
+      window: 10          # 滑窗大小（论文设置）
+      stride: 2           # 滑窗步长（论文设置）
+      log10: true
+    backbone: "resnet18"  # 频域分支用的 CNN（timm 名称）
+    pretrained: true
+    fusion: "concat_ln_linear"  # 目前实现为特征 concat + LN + Linear
+
+ddp:
+  sync_bn: false          # ResNet 可开；ConvNeXt 主体是 LN，一般不需要
